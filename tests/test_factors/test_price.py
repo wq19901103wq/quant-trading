@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.factors.price import ReturnFactor, VolatilityFactor, HighLowRatioFactor
+from src.factors.price import ReturnFactor, VolatilityFactor, HighLowRatioFactor
 
 
 class TestReturnFactor:

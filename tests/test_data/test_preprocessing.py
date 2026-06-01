@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quant_trading.data.preprocessing import (
+from src.data.preprocessing import (
     calculate_ma,
     calculate_rsi,
     calculate_macd,

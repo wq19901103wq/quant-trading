@@ -3,7 +3,7 @@ from typing import Any, Dict
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-from quant_trading.models.base import Model
+from src.models.base import Model
 
 
 class LightGBMModel(Model):

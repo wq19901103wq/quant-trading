@@ -2,7 +2,7 @@ import os
 import tempfile
 import json
 import pandas as pd
-from quant_trading.experiments.recorder import Recorder
+from src.experiments.recorder import Recorder
 
 
 class TestRecorder:

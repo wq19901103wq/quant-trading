@@ -1,6 +1,6 @@
 """因子注册中心."""
 from typing import Dict, Type, List
-from quant_trading.factors.base import Factor
+from src.factors.base import Factor
 
 
 class FactorRegistry:

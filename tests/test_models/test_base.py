@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.models.base import Model
+from src.models.base import Model
 import tempfile
 import os
 

@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.models.cross_validation import TimeSeriesCV
-from quant_trading.models.gbdt import LightGBMModel
+from src.models.cross_validation import TimeSeriesCV
+from src.models.gbdt import LightGBMModel
 
 
 class TestTimeSeriesCV:

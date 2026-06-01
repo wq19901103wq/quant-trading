@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.factors.evaluator import FactorEvaluator
+from src.factors.evaluator import FactorEvaluator
 
 
 class TestFactorEvaluator:

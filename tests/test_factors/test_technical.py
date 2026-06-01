@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.factors.technical import MovingAverageFactor, RSIFactor, MACDFactor, BollingerUpperFactor
+from src.factors.technical import MovingAverageFactor, RSIFactor, MACDFactor, BollingerUpperFactor
 
 
 class TestMovingAverageFactor:

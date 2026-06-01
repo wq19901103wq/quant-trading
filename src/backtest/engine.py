@@ -2,9 +2,9 @@
 from typing import Dict, List, Optional, Callable
 import pandas as pd
 import numpy as np
-from quant_trading.portfolio.strategy import PortfolioStrategy
-from quant_trading.backtest.executor import Executor
-from quant_trading.metrics.core import calculate_metrics
+from src.portfolio.strategy import PortfolioStrategy
+from src.backtest.executor import Executor
+from src.metrics.core import calculate_metrics
 
 
 class BacktestEngine:

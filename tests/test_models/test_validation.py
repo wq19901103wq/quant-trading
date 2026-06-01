@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from quant_trading.models.validation import evaluate_regression, ic_score, rank_ic_score
+from src.models.validation import evaluate_regression, ic_score, rank_ic_score
 
 
 class TestValidation:

@@ -1,5 +1,5 @@
 import pytest
-from quant_trading.utils.config import Config, load_config, save_config_snapshot
+from src.utils.config import Config, load_config, save_config_snapshot
 import tempfile
 import os
 

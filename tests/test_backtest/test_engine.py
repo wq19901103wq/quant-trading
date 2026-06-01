@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
-from quant_trading.backtest.engine import BacktestEngine
-from quant_trading.portfolio.strategy import TopKStrategy
-from quant_trading.backtest.executor import Executor
+from src.backtest.engine import BacktestEngine
+from src.portfolio.strategy import TopKStrategy
+from src.backtest.executor import Executor
 
 
 class TestBacktestEngine:

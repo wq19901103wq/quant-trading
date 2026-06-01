@@ -1,8 +1,8 @@
 """技术指标因子."""
 import pandas as pd
-from quant_trading.factors.base import Factor
-from quant_trading.data.preprocessing import calculate_ma, calculate_rsi, calculate_macd, calculate_bollinger_bands
-from quant_trading.factors.registry import FactorRegistry
+from src.factors.base import Factor
+from src.data.preprocessing import calculate_ma, calculate_rsi, calculate_macd, calculate_bollinger_bands
+from src.factors.registry import FactorRegistry
 
 
 @FactorRegistry.register

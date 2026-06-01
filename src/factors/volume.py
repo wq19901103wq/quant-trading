@@ -1,8 +1,8 @@
 """成交量因子."""
 import pandas as pd
 import numpy as np
-from quant_trading.factors.base import Factor
-from quant_trading.factors.registry import FactorRegistry
+from src.factors.base import Factor
+from src.factors.registry import FactorRegistry
 
 
 @FactorRegistry.register

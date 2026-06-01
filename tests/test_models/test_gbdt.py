@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.models.gbdt import LightGBMModel
+from src.models.gbdt import LightGBMModel
 
 
 class TestLightGBMModel:

@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.data.cleaner import DataCleaner
+from src.data.cleaner import DataCleaner
 
 
 class TestDataCleaner:

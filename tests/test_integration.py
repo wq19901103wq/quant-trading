@@ -2,18 +2,18 @@ import os
 import tempfile
 import pandas as pd
 import numpy as np
-from quant_trading.data.loader import CSVDataSource, DataLoader
-from quant_trading.data.cleaner import DataCleaner
-from quant_trading.data.handler import DataHandler
-from quant_trading.factors.registry import FactorRegistry
-from quant_trading.factors.technical import MovingAverageFactor
-from quant_trading.models.gbdt import LightGBMModel
-from quant_trading.models.cross_validation import TimeSeriesCV
-from quant_trading.portfolio.strategy import TopKStrategy
-from quant_trading.backtest.executor import Executor
-from quant_trading.backtest.engine import BacktestEngine
-from quant_trading.experiments.recorder import Recorder
-from quant_trading.pipeline.rolling import RollingBacktest
+from src.data.loader import CSVDataSource, DataLoader
+from src.data.cleaner import DataCleaner
+from src.data.handler import DataHandler
+from src.factors.registry import FactorRegistry
+from src.factors.technical import MovingAverageFactor
+from src.models.gbdt import LightGBMModel
+from src.models.cross_validation import TimeSeriesCV
+from src.portfolio.strategy import TopKStrategy
+from src.backtest.executor import Executor
+from src.backtest.engine import BacktestEngine
+from src.experiments.recorder import Recorder
+from src.pipeline.rolling import RollingBacktest
 
 
 class TestEndToEnd:

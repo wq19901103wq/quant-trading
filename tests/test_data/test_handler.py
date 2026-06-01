@@ -2,9 +2,9 @@ import os
 import tempfile
 import pandas as pd
 import pytest
-from quant_trading.data.loader import CSVDataSource, DataLoader
-from quant_trading.data.cleaner import DataCleaner
-from quant_trading.data.handler import DataHandler
+from src.data.loader import CSVDataSource, DataLoader
+from src.data.cleaner import DataCleaner
+from src.data.handler import DataHandler
 
 
 class TestDataHandler:

@@ -3,13 +3,13 @@ import tempfile
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.pipeline.rolling import RollingBacktest
-from quant_trading.data.loader import CSVDataSource, DataLoader
-from quant_trading.data.handler import DataHandler
-from quant_trading.models.gbdt import LightGBMModel
-from quant_trading.portfolio.strategy import TopKStrategy
-from quant_trading.backtest.executor import Executor
-from quant_trading.experiments.recorder import Recorder
+from src.pipeline.rolling import RollingBacktest
+from src.data.loader import CSVDataSource, DataLoader
+from src.data.handler import DataHandler
+from src.models.gbdt import LightGBMModel
+from src.portfolio.strategy import TopKStrategy
+from src.backtest.executor import Executor
+from src.experiments.recorder import Recorder
 
 
 class TestRollingBacktest:

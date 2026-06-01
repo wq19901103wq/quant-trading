@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import pytest
-from quant_trading.metrics.core import calculate_metrics
+from src.metrics.core import calculate_metrics
 
 
 class TestCalculateMetrics:

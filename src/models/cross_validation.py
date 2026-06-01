@@ -1,7 +1,7 @@
 """时序交叉验证."""
 from typing import List, Tuple
 import pandas as pd
-from quant_trading.models.base import Model
+from src.models.base import Model
 
 
 class TimeSeriesCV:

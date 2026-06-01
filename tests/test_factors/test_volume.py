@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.factors.volume import VolumeMAFactor, OBVFactor
+from src.factors.volume import VolumeMAFactor, OBVFactor
 
 
 class TestVolumeMAFactor:

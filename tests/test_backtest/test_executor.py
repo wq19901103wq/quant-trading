@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.backtest.executor import Executor
+from src.backtest.executor import Executor
 
 
 class TestExecutor:

@@ -2,14 +2,14 @@
 from typing import Dict, List, Optional, Callable
 import pandas as pd
 import numpy as np
-from quant_trading.data.handler import DataHandler
-from quant_trading.models.base import Model
-from quant_trading.portfolio.strategy import PortfolioStrategy
-from quant_trading.backtest.engine import BacktestEngine
-from quant_trading.backtest.executor import Executor
-from quant_trading.metrics.core import calculate_metrics
-from quant_trading.experiments.recorder import Recorder
-from quant_trading.models.validation import evaluate_regression
+from src.data.handler import DataHandler
+from src.models.base import Model
+from src.portfolio.strategy import PortfolioStrategy
+from src.backtest.engine import BacktestEngine
+from src.backtest.executor import Executor
+from src.metrics.core import calculate_metrics
+from src.experiments.recorder import Recorder
+from src.models.validation import evaluate_regression
 
 
 class RollingBacktest:

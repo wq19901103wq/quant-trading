@@ -4,8 +4,8 @@ import pandas as pd
 import numpy as np
 import logging
 
-from quant_trading.data.loader import DataLoader
-from quant_trading.data.cleaner import DataCleaner
+from src.data.loader import DataLoader
+from src.data.cleaner import DataCleaner
 
 logger = logging.getLogger(__name__)
 

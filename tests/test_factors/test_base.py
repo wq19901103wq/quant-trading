@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.factors.base import Factor
+from src.factors.base import Factor
 
 
 class DummyFactor(Factor):

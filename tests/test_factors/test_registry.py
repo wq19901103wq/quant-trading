@@ -1,6 +1,6 @@
 import pytest
-from quant_trading.factors.registry import FactorRegistry
-from quant_trading.factors.base import Factor
+from src.factors.registry import FactorRegistry
+from src.factors.base import Factor
 import pandas as pd
 
 

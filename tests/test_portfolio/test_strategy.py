@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from quant_trading.portfolio.strategy import TopKStrategy, RankWeightedStrategy, LongShortStrategy
+from src.portfolio.strategy import TopKStrategy, RankWeightedStrategy, LongShortStrategy
 
 
 class TestTopKStrategy:

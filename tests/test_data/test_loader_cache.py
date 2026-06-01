@@ -2,7 +2,7 @@ import os
 import tempfile
 import pandas as pd
 import pytest
-from quant_trading.data.loader import CachedAKShareDataSource, CSVDataSource
+from src.data.loader import CachedAKShareDataSource, CSVDataSource
 
 
 class TestCachedAKShareDataSource:
