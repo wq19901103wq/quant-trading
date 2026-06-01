@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""端到端 Demo：用 AKShare 真实 A 股数据跑完整量化流水线.
+"""端到端 Demo：用 AKShare 真实 A 股数据跑完整量化流水线（大规模版本）.
+
+默认配置：500 只股票 × 10 年数据
+首次运行约 8-10 分钟（网络拉取），后续从缓存秒级运行.
 
 用法:
     cd ~/quant-trading
@@ -8,11 +11,11 @@
 import sys
 from pathlib import Path
 
-# 将 src 加入路径
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
 import logging
+import time
 import pandas as pd
 import numpy as np
 
@@ -25,7 +28,6 @@ from quant_trading.portfolio.strategy import TopKStrategy
 from quant_trading.backtest.executor import Executor
 from quant_trading.backtest.engine import BacktestEngine
 from quant_trading.experiments.recorder import Recorder
-from quant_trading.metrics.core import calculate_metrics
 from quant_trading.models.validation import evaluate_regression
 
 logging.basicConfig(
@@ -37,68 +39,95 @@ logger = logging.getLogger("demo")
 # =============================================================================
 # 配置参数
 # =============================================================================
-SYMBOLS = ["000001", "000002", "600036"]  # 平安银行、万科A、招商银行
-START_DATE = "2022-01-01"
+NUM_STOCKS = 500          # 股票数量
+START_DATE = "2015-01-01"
 END_DATE = "2024-12-31"
-TRAIN_END = "2023-12-31"
+TRAIN_END = "2022-12-31"
 CACHE_DIR = "./data/cache"
 EXPERIMENT_DIR = "./experiments"
 
 
+def get_stock_list(n: int = 500) -> list:
+    """获取A股列表，过滤ST股，返回前n只."""
+    import akshare as ak
+    df = ak.stock_info_a_code_name()
+    # 过滤ST/*ST/退市
+    df = df[~df["name"].str.contains(r"ST|退|摘", na=False, regex=True)]
+    # 过滤B股（代码以2/9开头）和非标准代码
+    df = df[df["code"].str.match(r"^[06\d]\d{5}$")]
+    symbols = df["code"].head(n).tolist()
+    logger.info("Selected %d stocks", len(symbols))
+    return symbols
+
+
 def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
-    """为单只股票计算因子（避免 lookahead）."""
+    """为每只股票独立计算因子（避免跨股票污染）."""
     df = df.copy()
-    df["ma_20"] = calculate_ma(df["close"], window=20, shift=True)
-    df["rsi_14"] = calculate_rsi(df["close"], window=14, shift=True)
-    df["return_1d"] = df["close"].pct_change().shift(-1)  # 标签：次日收益
-    df["volatility_20d"] = df["close"].pct_change().rolling(20).std().shift(1)
+    # 按 symbol 分组计算
+    df["ma_20"] = df.groupby(level="symbol")["close"].transform(
+        lambda x: calculate_ma(x, window=20, shift=True)
+    )
+    df["rsi_14"] = df.groupby(level="symbol")["close"].transform(
+        lambda x: calculate_rsi(x, window=14, shift=True)
+    )
+    df["volatility_20d"] = df.groupby(level="symbol")["close"].transform(
+        lambda x: x.pct_change().rolling(20).std().shift(1)
+    )
+    # 标签：未来5日收益（比1日更容易预测）
+    df["return_5d"] = df.groupby(level="symbol")["close"].transform(
+        lambda x: x.pct_change(5).shift(-5)
+    )
     return df
 
 
 def main():
-    logger.info("=" * 60)
-    logger.info("Quant Trading Pipeline Demo — Real Data")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Quant Trading Pipeline Demo — Large Scale")
+    logger.info("Config: %d stocks × %s ~ %s", NUM_STOCKS, START_DATE, END_DATE)
+    logger.info("=" * 70)
 
     # -------------------------------------------------------------------------
-    # 1. 数据加载（带本地缓存）
+    # 1. 获取股票列表
     # -------------------------------------------------------------------------
-    logger.info("[1/6] 从 AKShare 加载数据...")
+    logger.info("[1/7] 获取股票列表...")
+    symbols = get_stock_list(NUM_STOCKS)
+    if len(symbols) < NUM_STOCKS:
+        logger.warning("Only got %d stocks, proceeding with available", len(symbols))
+
+    # -------------------------------------------------------------------------
+    # 2. 数据加载（带本地缓存）
+    # -------------------------------------------------------------------------
+    logger.info("[2/7] 从 AKShare 加载数据（首次约 %d 分钟）...", len(symbols) // 60 + 1)
     source = CachedAKShareDataSource(cache_dir=CACHE_DIR, adjust="qfq", provider="sina")
     loader = DataLoader(source)
 
-    all_frames = []
-    for sym in SYMBOLS:
-        try:
-            raw = loader.load(sym, START_DATE, END_DATE, use_cache=True)
-            logger.info("  %s: %d 条原始数据", sym, len(raw))
-            cleaner = DataCleaner()
-            cleaned = cleaner.clean(raw, symbol=sym)
-            logger.info("  %s: 清洗后 %d 条 (保留率 %.1f%%)",
-                        sym, len(cleaned), cleaner.get_report()["retention"] * 100)
-            factored = compute_factors(cleaned)
-            factored["symbol"] = sym
-            all_frames.append(factored)
-        except Exception as e:
-            logger.error("加载 %s 失败: %s", sym, e)
+    # DataHandler 直接负责加载和清洗
+    handler = DataHandler(
+        data_loader=loader,
+        symbols=symbols,
+        start_date=START_DATE,
+        end_date=END_DATE,
+        features=["ma_20", "rsi_14", "volatility_20d"],
+        label="return_5d",
+        cleaner=DataCleaner(),
+        pre_processor=compute_factors,
+        na_method="drop",
+    )
 
-    if len(all_frames) < len(SYMBOLS):
-        logger.warning("部分股票加载失败，仅使用 %d / %d 只", len(all_frames), len(SYMBOLS))
-
-    combined_df = pd.concat(all_frames)
-    combined_df = combined_df.dropna(subset=["ma_20", "rsi_14", "volatility_20d", "return_1d"])
-    logger.info("合并后共 %d 条样本", len(combined_df))
+    df = handler.get_data()
+    logger.info("合并后共 %d 条样本 (%.1f 万), %d 只股票",
+                len(df), len(df) / 10000, df.index.get_level_values("symbol").nunique())
 
     # -------------------------------------------------------------------------
-    # 2. 时序拆分训练 / 测试
+    # 3. 时序拆分训练 / 测试
     # -------------------------------------------------------------------------
-    logger.info("[2/6] 时序拆分训练集 / 测试集...")
-    train_df = combined_df[combined_df.index <= TRAIN_END]
-    test_df = combined_df[combined_df.index > TRAIN_END]
+    logger.info("[3/7] 时序拆分训练集 / 测试集...")
+    train_df = df.loc[df.index.get_level_values(0) <= TRAIN_END]
+    test_df = df.loc[df.index.get_level_values(0) > TRAIN_END]
     logger.info("训练集: %d 条, 测试集: %d 条", len(train_df), len(test_df))
 
-    feature_cols = ["ma_20", "rsi_14", "volatility_20d"]
-    label_col = "return_1d"
+    feature_cols = handler.get_feature_cols()
+    label_col = handler.get_label_col()
 
     X_train = train_df[feature_cols]
     y_train = train_df[label_col]
@@ -106,9 +135,9 @@ def main():
     y_test = test_df[label_col]
 
     # -------------------------------------------------------------------------
-    # 3. 模型训练
+    # 4. 模型训练
     # -------------------------------------------------------------------------
-    logger.info("[3/6] 训练 LightGBM 模型...")
+    logger.info("[4/7] 训练 LightGBM 模型...")
     model = LightGBMModel(params={
         "objective": "regression",
         "metric": "rmse",
@@ -120,6 +149,7 @@ def main():
         "bagging_freq": 5,
         "verbose": -1,
         "seed": 42,
+        "num_threads": 4,
     })
     model.fit(X_train, y_train)
     preds = model.predict(X_test)
@@ -137,25 +167,34 @@ def main():
         logger.info("  %s: %.2f", feat, imp)
 
     # -------------------------------------------------------------------------
-    # 4. 回测（简化：每日按预测值排序，Top-1 等权持有）
+    # 5. 回测（截面多股票）
     # -------------------------------------------------------------------------
-    logger.info("[4/6] 回测模拟...")
+    logger.info("[5/7] 回测模拟（截面多股票）...")
     test_df = test_df.copy()
     test_df["pred"] = preds
 
-    # 构造每日截面预测 DataFrame（日期 x 股票）
-    pred_pivot = test_df.pivot(columns="symbol", values="pred")
-    price_pivot = test_df.pivot(columns="symbol", values="close")
+    # 将长格式 pivot 为截面矩阵: index=date, columns=symbol
+    pred_pivot = test_df["pred"].unstack(level="symbol")
+    price_pivot = test_df["close"].unstack(level="symbol")
 
-    # 只保留有完整数据的日期
+    # 只保留同时有预测和价格的日期
     common_dates = pred_pivot.index.intersection(price_pivot.index)
-    pred_pivot = pred_pivot.loc[common_dates].ffill()
-    price_pivot = price_pivot.loc[common_dates].ffill()
+    pred_pivot = pred_pivot.loc[common_dates]
+    price_pivot = price_pivot.loc[common_dates]
+
+    # 填充缺失值（停牌股票用 NaN 表示不可交易）
+    pred_pivot = pred_pivot.ffill(limit=5)
+    price_pivot = price_pivot.ffill()
+
+    logger.info("回测日期范围: %s ~ %s (%d 个交易日)",
+                common_dates[0].strftime("%Y-%m-%d"),
+                common_dates[-1].strftime("%Y-%m-%d"),
+                len(common_dates))
 
     engine = BacktestEngine(
-        strategy=TopKStrategy(k=1),
+        strategy=TopKStrategy(k=10),  # 每日选预测最高的10只
         executor=Executor(commission_rate=0.001, min_commission=0),
-        initial_capital=1_000_000,
+        initial_capital=10_000_000,
     )
     result = engine.run(pred_pivot, price_pivot)
     metrics = result["metrics"]
@@ -169,18 +208,19 @@ def main():
     logger.info("  Calmar:     %.3f", metrics["calmar_ratio"])
 
     # -------------------------------------------------------------------------
-    # 5. 记录实验结果
+    # 6. 记录实验结果
     # -------------------------------------------------------------------------
-    logger.info("[5/6] 保存实验记录...")
-    recorder = Recorder(EXPERIMENT_DIR, experiment_name="real_data_demo")
+    logger.info("[6/7] 保存实验记录...")
+    recorder = Recorder(EXPERIMENT_DIR, experiment_name="large_scale_demo")
     recorder.log_params({
-        "symbols": SYMBOLS,
+        "num_stocks": len(symbols),
         "start_date": START_DATE,
         "end_date": END_DATE,
         "train_end": TRAIN_END,
         "features": feature_cols,
         "label": label_col,
         "model": "LightGBM",
+        "top_k": 10,
     })
     recorder.log_metrics({**val_metrics, **metrics})
     recorder.log_artifact("predictions.csv", pd.Series(preds, index=y_test.index, name="prediction"))
@@ -188,18 +228,18 @@ def main():
     logger.info("结果已保存到: %s", recorder.get_run_dir())
 
     # -------------------------------------------------------------------------
-    # 6. 每日收益摘要
+    # 7. 收益摘要
     # -------------------------------------------------------------------------
-    logger.info("[6/6] 收益摘要:")
+    logger.info("[7/7] 收益摘要:")
     returns = result["returns"]
     logger.info("  日均收益:   %.4f%%", returns.mean() * 100)
     logger.info("  收益标准差: %.4f%%", returns.std() * 100)
     logger.info("  正收益天数: %d / %d (%.1f%%)",
                 (returns > 0).sum(), len(returns), (returns > 0).mean() * 100)
 
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     logger.info("Demo 完成!")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
 
 
 if __name__ == "__main__":

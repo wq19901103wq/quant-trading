@@ -41,7 +41,12 @@ class RollingBacktest:
             raise ValueError("No data loaded")
         features = self.data_handler.get_feature_cols()
         label_col = self.label_col or self.data_handler.get_label_col()
-        dates = df.index.unique()
+
+        # 支持 MultiIndex (date, symbol)
+        if isinstance(df.index, pd.MultiIndex):
+            dates = df.index.get_level_values(0).unique().sort_values()
+        else:
+            dates = df.index.unique()
         n = len(dates)
         all_predictions = []
         all_returns = []
@@ -54,8 +59,15 @@ class RollingBacktest:
             train_dates = dates[train_start:train_end]
             test_dates = dates[train_end:test_end]
 
-            train_df = df.loc[df.index.isin(train_dates)]
-            test_df = df.loc[df.index.isin(test_dates)]
+            if isinstance(df.index, pd.MultiIndex):
+                mask_train = df.index.get_level_values(0).isin(train_dates)
+                mask_test = df.index.get_level_values(0).isin(test_dates)
+            else:
+                mask_train = df.index.isin(train_dates)
+                mask_test = df.index.isin(test_dates)
+
+            train_df = df.loc[mask_train]
+            test_df = df.loc[mask_test]
 
             X_train = train_df[features]
             y_train = train_df[label_col]
@@ -70,8 +82,11 @@ class RollingBacktest:
             all_predictions.append(pred_series)
 
             if "close" in test_df.columns:
-                # simplistic single-symbol assumption for integration test
-                returns = test_df["close"].pct_change().shift(-1).reindex(test_df.index)
+                # 按 symbol 分组计算收益，避免跨股票污染
+                if isinstance(test_df.index, pd.MultiIndex):
+                    returns = test_df["close"].groupby(level="symbol").pct_change().shift(-1).reindex(test_df.index)
+                else:
+                    returns = test_df["close"].pct_change().shift(-1).reindex(test_df.index)
                 all_returns.append(returns)
 
             fold_results.append({

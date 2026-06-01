@@ -1,5 +1,5 @@
 """DataHandler：将 loader + cleaner + factors 组装为统一入口."""
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Callable
 import pandas as pd
 import numpy as np
 import logging
@@ -20,7 +20,7 @@ class DataHandler:
         features: List[str],
         label: str,
         cleaner: Optional[DataCleaner] = None,
-        pre_processor: Optional[callable] = None,
+        pre_processor: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
         na_method: str = "drop",
     ):
         self.data_loader = data_loader
@@ -38,17 +38,24 @@ class DataHandler:
 
     def load_data(self) -> pd.DataFrame:
         all_frames = []
+        success_count = 0
         for sym in self.symbols:
             try:
                 raw = self.data_loader.load(sym, self.start_date, self.end_date)
                 cleaned = self.cleaner.clean(raw, symbol=sym)
+                cleaned = cleaned.reset_index()
                 cleaned["symbol"] = sym
                 all_frames.append(cleaned)
-            except FileNotFoundError:
-                logger.warning("Data not found for %s, skipping", sym)
+                success_count += 1
+            except (FileNotFoundError, Exception) as e:
+                logger.warning("Data load failed for %s: %s", sym, e)
+        logger.info("Successfully loaded %d / %d symbols", success_count, len(self.symbols))
         if not all_frames:
             return pd.DataFrame()
-        df = pd.concat(all_frames)
+        df = pd.concat(all_frames, ignore_index=True)
+        # 设置 MultiIndex (date, symbol)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index(["date", "symbol"]).sort_index()
         if self.pre_processor:
             df = self.pre_processor(df)
         return df
@@ -60,12 +67,13 @@ class DataHandler:
             raise ValueError(f"Missing columns: {missing}")
         self._feature_cols = self.features
         self._label_col = self.label
+        cols_to_check = self._feature_cols + [self._label_col]
         if self.na_method == "drop":
-            df = df.dropna(subset=self._feature_cols + [self._label_col])
+            df = df.dropna(subset=cols_to_check)
         elif self.na_method == "ffill":
-            df[self._feature_cols + [self._label_col]] = df[self._feature_cols + [self._label_col]].fillna(method="ffill")
+            df[cols_to_check] = df[cols_to_check].groupby(level="symbol").transform(lambda x: x.ffill())
         elif self.na_method == "zero":
-            df[self._feature_cols + [self._label_col]] = df[self._feature_cols + [self._label_col]].fillna(0)
+            df[cols_to_check] = df[cols_to_check].fillna(0)
         return df
 
     def get_data(self) -> pd.DataFrame:
