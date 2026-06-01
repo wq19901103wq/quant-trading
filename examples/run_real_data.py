@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""端到端 Demo：用 AKShare 真实 A 股数据跑完整量化流水线（大规模版本）.
+"""端到端 Demo：扩展窗口滚动回测 + 超额收益（500只股票 / 10年）.
 
-默认配置：500 只股票 × 10 年数据
-首次运行约 8-10 分钟（网络拉取），后续从缓存秒级运行.
+滚动设计（扩展窗口）：
+  Fold 1: 训练 2015-2017 → 测试 2018
+  Fold 2: 训练 2015-2018 → 测试 2019
+  Fold 3: 训练 2015-2019 → 测试 2020
+  ...
+  Fold 7: 训练 2015-2023 → 测试 2024
 
 用法:
     cd ~/quant-trading
@@ -16,6 +20,7 @@ sys.path.insert(0, str(src_path))
 
 import logging
 import time
+from typing import Dict
 import pandas as pd
 import numpy as np
 
@@ -28,6 +33,7 @@ from quant_trading.portfolio.strategy import TopKStrategy
 from quant_trading.backtest.executor import Executor
 from quant_trading.backtest.engine import BacktestEngine
 from quant_trading.experiments.recorder import Recorder
+from quant_trading.metrics.core import calculate_metrics, calculate_excess_metrics
 from quant_trading.models.validation import evaluate_regression
 
 logging.basicConfig(
@@ -39,31 +45,37 @@ logger = logging.getLogger("demo")
 # =============================================================================
 # 配置参数
 # =============================================================================
-NUM_STOCKS = 500          # 股票数量
+NUM_STOCKS = 500
 START_DATE = "2015-01-01"
 END_DATE = "2024-12-31"
-TRAIN_END = "2022-12-31"
 CACHE_DIR = "./data/cache"
 EXPERIMENT_DIR = "./experiments"
+INITIAL_CAPITAL = 10_000_000
+TOP_K = 10
 
 
 def get_stock_list(n: int = 500) -> list:
     """获取A股列表，过滤ST股，返回前n只."""
     import akshare as ak
     df = ak.stock_info_a_code_name()
-    # 过滤ST/*ST/退市
     df = df[~df["name"].str.contains(r"ST|退|摘", na=False, regex=True)]
-    # 过滤B股（代码以2/9开头）和非标准代码
     df = df[df["code"].str.match(r"^[06\d]\d{5}$")]
     symbols = df["code"].head(n).tolist()
     logger.info("Selected %d stocks", len(symbols))
     return symbols
 
 
+def get_benchmark_from_data(df: pd.DataFrame) -> pd.Series:
+    """从已有股票数据构造等权组合收益作为基准（无需额外网络请求）."""
+    # 每日所有股票的等权收益
+    daily_returns = df["close"].groupby(level="symbol").pct_change()
+    benchmark = daily_returns.groupby(level=0).mean()  # 按日期等权平均
+    return benchmark.dropna()
+
+
 def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     """为每只股票独立计算因子（避免跨股票污染）."""
     df = df.copy()
-    # 按 symbol 分组计算
     df["ma_20"] = df.groupby(level="symbol")["close"].transform(
         lambda x: calculate_ma(x, window=20, shift=True)
     )
@@ -73,71 +85,23 @@ def compute_factors(df: pd.DataFrame) -> pd.DataFrame:
     df["volatility_20d"] = df.groupby(level="symbol")["close"].transform(
         lambda x: x.pct_change().rolling(20).std().shift(1)
     )
-    # 标签：未来5日收益（比1日更容易预测）
     df["return_5d"] = df.groupby(level="symbol")["close"].transform(
         lambda x: x.pct_change(5).shift(-5)
     )
     return df
 
 
-def main():
-    logger.info("=" * 70)
-    logger.info("Quant Trading Pipeline Demo — Large Scale")
-    logger.info("Config: %d stocks × %s ~ %s", NUM_STOCKS, START_DATE, END_DATE)
-    logger.info("=" * 70)
-
-    # -------------------------------------------------------------------------
-    # 1. 获取股票列表
-    # -------------------------------------------------------------------------
-    logger.info("[1/7] 获取股票列表...")
-    symbols = get_stock_list(NUM_STOCKS)
-    if len(symbols) < NUM_STOCKS:
-        logger.warning("Only got %d stocks, proceeding with available", len(symbols))
-
-    # -------------------------------------------------------------------------
-    # 2. 数据加载（带本地缓存）
-    # -------------------------------------------------------------------------
-    logger.info("[2/7] 从 AKShare 加载数据（首次约 %d 分钟）...", len(symbols) // 60 + 1)
-    source = CachedAKShareDataSource(cache_dir=CACHE_DIR, adjust="qfq", provider="sina")
-    loader = DataLoader(source)
-
-    # DataHandler 直接负责加载和清洗
-    handler = DataHandler(
-        data_loader=loader,
-        symbols=symbols,
-        start_date=START_DATE,
-        end_date=END_DATE,
-        features=["ma_20", "rsi_14", "volatility_20d"],
-        label="return_5d",
-        cleaner=DataCleaner(),
-        pre_processor=compute_factors,
-        na_method="drop",
-    )
-
-    df = handler.get_data()
-    logger.info("合并后共 %d 条样本 (%.1f 万), %d 只股票",
-                len(df), len(df) / 10000, df.index.get_level_values("symbol").nunique())
-
-    # -------------------------------------------------------------------------
-    # 3. 时序拆分训练 / 测试
-    # -------------------------------------------------------------------------
-    logger.info("[3/7] 时序拆分训练集 / 测试集...")
-    train_df = df.loc[df.index.get_level_values(0) <= TRAIN_END]
-    test_df = df.loc[df.index.get_level_values(0) > TRAIN_END]
-    logger.info("训练集: %d 条, 测试集: %d 条", len(train_df), len(test_df))
-
-    feature_cols = handler.get_feature_cols()
-    label_col = handler.get_label_col()
+def run_fold(train_df: pd.DataFrame, test_df: pd.DataFrame, fold_idx: int, benchmark_returns: pd.Series) -> Dict:
+    """运行单个 fold：训练 → 预测 → 回测."""
+    feature_cols = ["ma_20", "rsi_14", "volatility_20d"]
+    label_col = "return_5d"
 
     X_train = train_df[feature_cols]
     y_train = train_df[label_col]
     X_test = test_df[feature_cols]
     y_test = test_df[label_col]
 
-    # -------------------------------------------------------------------------
-    # 4. 模型训练
-    # -------------------------------------------------------------------------
-    logger.info("[4/7] 训练 LightGBM 模型...")
+    # 训练
     model = LightGBMModel(params={
         "objective": "regression",
         "metric": "rmse",
@@ -153,89 +117,225 @@ def main():
     })
     model.fit(X_train, y_train)
     preds = model.predict(X_test)
-    logger.info("预测完成: %d 条预测值", len(preds))
 
     # 验证指标
     val_metrics = evaluate_regression(y_test, preds)
-    logger.info("验证指标 — MSE: %.6f, RMSE: %.6f, R²: %.4f",
-                val_metrics["mse"], val_metrics["rmse"], val_metrics["r2"])
 
-    # 特征重要性
-    importance = model.feature_importance()
-    logger.info("特征重要性:")
-    for feat, imp in importance.items():
-        logger.info("  %s: %.2f", feat, imp)
-
-    # -------------------------------------------------------------------------
-    # 5. 回测（截面多股票）
-    # -------------------------------------------------------------------------
-    logger.info("[5/7] 回测模拟（截面多股票）...")
+    # 回测准备
     test_df = test_df.copy()
     test_df["pred"] = preds
-
-    # 将长格式 pivot 为截面矩阵: index=date, columns=symbol
     pred_pivot = test_df["pred"].unstack(level="symbol")
     price_pivot = test_df["close"].unstack(level="symbol")
 
-    # 只保留同时有预测和价格的日期
     common_dates = pred_pivot.index.intersection(price_pivot.index)
     pred_pivot = pred_pivot.loc[common_dates]
     price_pivot = price_pivot.loc[common_dates]
-
-    # 填充缺失值（停牌股票用 NaN 表示不可交易）
     pred_pivot = pred_pivot.ffill(limit=5)
     price_pivot = price_pivot.ffill()
 
-    logger.info("回测日期范围: %s ~ %s (%d 个交易日)",
-                common_dates[0].strftime("%Y-%m-%d"),
-                common_dates[-1].strftime("%Y-%m-%d"),
-                len(common_dates))
-
+    # 回测
     engine = BacktestEngine(
-        strategy=TopKStrategy(k=10),  # 每日选预测最高的10只
+        strategy=TopKStrategy(k=TOP_K),
         executor=Executor(commission_rate=0.001, min_commission=0),
-        initial_capital=10_000_000,
+        initial_capital=INITIAL_CAPITAL,
     )
     result = engine.run(pred_pivot, price_pivot)
     metrics = result["metrics"]
-    logger.info("回测完成!")
-    logger.info("  总收益:     %.2f%%", metrics["total_return"] * 100)
-    logger.info("  年化收益:   %.2f%%", metrics["annualized_return"] * 100)
-    logger.info("  波动率:     %.2f%%", metrics["volatility"] * 100)
-    logger.info("  Sharpe:     %.3f", metrics["sharpe_ratio"])
-    logger.info("  Sortino:    %.3f", metrics["sortino_ratio"])
-    logger.info("  最大回撤:   %.2f%%", metrics["max_drawdown"] * 100)
-    logger.info("  Calmar:     %.3f", metrics["calmar_ratio"])
+
+    # 超额收益
+    port_returns = result["returns"]
+    bench_aligned = benchmark_returns.reindex(port_returns.index).fillna(0)
+    excess_metrics = calculate_excess_metrics(port_returns, bench_aligned)
+
+    logger.info(
+        "  Fold %d 完成 | train=%d test=%d | "
+        "total=%+.2f%% excess=%+.2f%% IR=%.3f maxdd=%.2f%%",
+        fold_idx,
+        len(train_df),
+        len(test_df),
+        metrics["total_return"] * 100,
+        excess_metrics["annualized_excess_return"] * 100,
+        excess_metrics["information_ratio"],
+        metrics["max_drawdown"] * 100,
+    )
+
+    return {
+        "fold": fold_idx,
+        "train_size": len(train_df),
+        "test_size": len(test_df),
+        "metrics": metrics,
+        "excess_metrics": excess_metrics,
+        "val_metrics": val_metrics,
+        "portfolio_values": result["portfolio_values"],
+        "returns": port_returns,
+        "predictions": pd.Series(preds, index=y_test.index),
+    }
+
+
+def main():
+    logger.info("=" * 70)
+    logger.info("Quant Trading Pipeline Demo — Expanding Window + Excess Return")
+    logger.info("Config: %d stocks × %s ~ %s", NUM_STOCKS, START_DATE, END_DATE)
+    logger.info("=" * 70)
 
     # -------------------------------------------------------------------------
-    # 6. 记录实验结果
+    # 1. 获取股票列表
     # -------------------------------------------------------------------------
-    logger.info("[6/7] 保存实验记录...")
-    recorder = Recorder(EXPERIMENT_DIR, experiment_name="large_scale_demo")
+    logger.info("[1/6] 获取股票列表...")
+    symbols = get_stock_list(NUM_STOCKS)
+
+    # -------------------------------------------------------------------------
+    # 2. 加载数据
+    # -------------------------------------------------------------------------
+    logger.info("[2/6] 加载股票数据...")
+    source = CachedAKShareDataSource(cache_dir=CACHE_DIR, adjust="qfq", provider="sina")
+    loader = DataLoader(source)
+
+    handler = DataHandler(
+        data_loader=loader,
+        symbols=symbols,
+        start_date=START_DATE,
+        end_date=END_DATE,
+        features=["ma_20", "rsi_14", "volatility_20d"],
+        label="return_5d",
+        cleaner=DataCleaner(),
+        pre_processor=compute_factors,
+        na_method="drop",
+    )
+    df = handler.get_data()
+    n_symbols = df.index.get_level_values("symbol").nunique()
+    logger.info("总样本: %d 条, 股票数: %d", len(df), n_symbols)
+
+    # -------------------------------------------------------------------------
+    # 3. 构造基准（等权组合）
+    # -------------------------------------------------------------------------
+    logger.info("[3/6] 构造等权基准...")
+    benchmark_returns = get_benchmark_from_data(df)
+    logger.info("基准数据: %d 个交易日", len(benchmark_returns))
+
+    # -------------------------------------------------------------------------
+    # 4. 扩展窗口滚动回测
+    # -------------------------------------------------------------------------
+    logger.info("[4/6] 扩展窗口滚动回测...")
+    dates = df.index.get_level_values(0).unique().sort_values()
+    years = sorted(dates.year.unique())
+
+    # 找到所有完整年份的测试年（从2018开始到2024）
+    test_years = [y for y in years if y >= 2018]
+    logger.info("共 %d 个 fold, 测试年份: %s", len(test_years), test_years)
+
+    all_fold_results = []
+    all_portfolio_values = []
+    all_returns = []
+
+    for fold_idx, test_year in enumerate(test_years, 1):
+        train_end_date = dates[dates.year < test_year][-1] if (dates.year < test_year).any() else dates[0]
+        test_mask = dates.year == test_year
+        test_dates = dates[test_mask]
+
+        if len(test_dates) == 0:
+            continue
+
+        train_mask = df.index.get_level_values(0) <= train_end_date
+        test_mask_df = df.index.get_level_values(0).isin(test_dates)
+        train_df = df.loc[train_mask]
+        test_df = df.loc[test_mask_df]
+
+        if len(train_df) < 1000 or len(test_df) < 100:
+            logger.warning("Fold %d 数据不足，跳过", fold_idx)
+            continue
+
+        logger.info(
+            "Fold %d/%d: 训练 %s ~ %s (%d条) → 测试 %d (%d条)",
+            fold_idx,
+            len(test_years),
+            dates[0].strftime("%Y-%m-%d"),
+            train_end_date.strftime("%Y-%m-%d"),
+            len(train_df),
+            test_year,
+            len(test_df),
+        )
+
+        fold_result = run_fold(train_df, test_df, fold_idx, benchmark_returns)
+        all_fold_results.append(fold_result)
+
+        # 累加收益曲线（将各 fold 组合收益拼接）
+        all_returns.append(fold_result["returns"])
+
+    # -------------------------------------------------------------------------
+    # 5. 汇总全周期结果
+    # -------------------------------------------------------------------------
+    logger.info("[5/6] 汇总全周期结果...")
+    combined_returns = pd.concat(all_returns).sort_index()
+    combined_metrics = calculate_metrics(combined_returns)
+    bench_aligned = benchmark_returns.reindex(combined_returns.index).fillna(0)
+    combined_excess = calculate_excess_metrics(combined_returns, bench_aligned)
+
+    logger.info("=" * 50)
+    logger.info("全周期汇总 (%d 个交易日)", len(combined_returns))
+    logger.info("=" * 50)
+    logger.info("绝对收益:")
+    logger.info("  总收益:       %+.2f%%", combined_metrics["total_return"] * 100)
+    logger.info("  年化收益:     %+.2f%%", combined_metrics["annualized_return"] * 100)
+    logger.info("  Sharpe:       %.3f", combined_metrics["sharpe_ratio"])
+    logger.info("  最大回撤:     %.2f%%", combined_metrics["max_drawdown"] * 100)
+    logger.info("超额收益 (vs 沪深300):")
+    logger.info("  超额收益:     %+.2f%%", combined_excess["annualized_excess_return"] * 100)
+    logger.info("  信息比率 IR:  %.3f", combined_excess["information_ratio"])
+    logger.info("  跟踪误差:     %.2f%%", combined_excess["tracking_error"] * 100)
+    logger.info("  超额回撤:     %.2f%%", combined_excess["excess_max_drawdown"] * 100)
+    logger.info("  Beta:         %.3f", combined_excess["beta"])
+
+    # 各 fold 明细
+    logger.info("-" * 50)
+    logger.info("各 Fold 明细:")
+    for r in all_fold_results:
+        logger.info(
+            "  Fold %d (%d): total=%+.2f%% excess=%+.2f%% IR=%.3f sharpe=%.3f",
+            r["fold"],
+            r["test_size"],
+            r["metrics"]["total_return"] * 100,
+            r["excess_metrics"]["annualized_excess_return"] * 100,
+            r["excess_metrics"]["information_ratio"],
+            r["metrics"]["sharpe_ratio"],
+        )
+
+    # -------------------------------------------------------------------------
+    # 6. 保存实验记录
+    # -------------------------------------------------------------------------
+    logger.info("[6/6] 保存实验记录...")
+    recorder = Recorder(EXPERIMENT_DIR, experiment_name="expanding_window_demo")
     recorder.log_params({
-        "num_stocks": len(symbols),
+        "num_stocks": n_symbols,
         "start_date": START_DATE,
         "end_date": END_DATE,
-        "train_end": TRAIN_END,
-        "features": feature_cols,
-        "label": label_col,
+        "top_k": TOP_K,
+        "initial_capital": INITIAL_CAPITAL,
+        "strategy": "TopKStrategy",
         "model": "LightGBM",
-        "top_k": 10,
+        "window_type": "expanding",
+        "test_years": test_years,
     })
-    recorder.log_metrics({**val_metrics, **metrics})
-    recorder.log_artifact("predictions.csv", pd.Series(preds, index=y_test.index, name="prediction"))
-    recorder.log_artifact("portfolio_values.csv", result["portfolio_values"])
+    recorder.log_metrics({**combined_metrics, **combined_excess})
+    recorder.log_artifact("returns.csv", combined_returns)
+    recorder.log_artifact("fold_summary.json", {
+        "folds": [
+            {
+                "fold": r["fold"],
+                "train_size": r["train_size"],
+                "test_size": r["test_size"],
+                "total_return": r["metrics"]["total_return"],
+                "annualized_return": r["metrics"]["annualized_return"],
+                "sharpe": r["metrics"]["sharpe_ratio"],
+                "max_drawdown": r["metrics"]["max_drawdown"],
+                "excess_return": r["excess_metrics"]["annualized_excess_return"],
+                "information_ratio": r["excess_metrics"]["information_ratio"],
+                "beta": r["excess_metrics"]["beta"],
+            }
+            for r in all_fold_results
+        ]
+    })
     logger.info("结果已保存到: %s", recorder.get_run_dir())
-
-    # -------------------------------------------------------------------------
-    # 7. 收益摘要
-    # -------------------------------------------------------------------------
-    logger.info("[7/7] 收益摘要:")
-    returns = result["returns"]
-    logger.info("  日均收益:   %.4f%%", returns.mean() * 100)
-    logger.info("  收益标准差: %.4f%%", returns.std() * 100)
-    logger.info("  正收益天数: %d / %d (%.1f%%)",
-                (returns > 0).sum(), len(returns), (returns > 0).mean() * 100)
 
     logger.info("=" * 70)
     logger.info("Demo 完成!")

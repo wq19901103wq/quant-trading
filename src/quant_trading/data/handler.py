@@ -52,6 +52,10 @@ class DataHandler:
         logger.info("Successfully loaded %d / %d symbols", success_count, len(self.symbols))
         if not all_frames:
             return pd.DataFrame()
+        # 过滤空 DataFrame 避免 FutureWarning
+        all_frames = [f for f in all_frames if not f.empty]
+        if not all_frames:
+            return pd.DataFrame()
         df = pd.concat(all_frames, ignore_index=True)
         # 设置 MultiIndex (date, symbol)
         df["date"] = pd.to_datetime(df["date"])
