@@ -108,8 +108,18 @@ class FactorMiningSkill:
             print(f"[Sandbox Error] {self.sandbox.get_error()}")
             return None
 
-        # 计算 IC
-        metrics = self.evaluator.evaluate(factor_values, forward_return)
+        # 规范化 index：确保 factor_values 和 forward_return 都是 (date, symbol) MultiIndex
+        if not isinstance(factor_values.index, pd.MultiIndex):
+            print(f"[Sandbox Error] Factor result index is not MultiIndex: {type(factor_values.index)}")
+            return None
+
+        # 对齐并计算 IC
+        try:
+            metrics = self.evaluator.evaluate(factor_values, forward_return)
+        except Exception as e:
+            print(f"[Evaluator Error] {e}")
+            return None
+
         return {
             "code": code,
             "ic": metrics.get("ic", np.nan),
